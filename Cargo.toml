@@ -1,0 +1,23 @@
+[package]
+name = "slides_wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Its own workspace: the size-tuned release profile below must not reach the app's build.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# lopdf's encryption code (unused by counting) pulls rand; getrandom needs a backend named for wasm32.
+lopdf = { version = "0.44.0", default-features = false, features = ["wasm_js"] }
+slides = { path = "../slides" }
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
