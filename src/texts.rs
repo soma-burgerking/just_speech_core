@@ -31,6 +31,10 @@ const PACKAGE_RELATIONSHIPS_NS: [&str; 1] =
 const ODF_PRESENTATION_NS: [&str; 1] = ["urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"];
 const ODF_TEXT_NS: [&str; 1] = ["urn:oasis:names:tc:opendocument:xmlns:text:1.0"];
 
+/// A run of spaces in prose is a handful; `text:c` is an unbounded integer
+/// that the text budget never sees, so a crafted count is not allocated.
+const MAX_SPACE_RUN: usize = 64;
+
 /// One entry per slide of a PPTX, in `sldIdLst` order (hidden slides included,
 /// as the count and the render).
 pub(crate) fn pptx<R: Read + Seek>(reader: R) -> Result<Vec<SlideText>> {
@@ -291,7 +295,8 @@ fn odf_paragraph(paragraph: Node) -> String {
                 .iter()
                 .find_map(|ns| node.attribute((*ns, "c")))
                 .and_then(|c| c.parse::<usize>().ok())
-                .unwrap_or(1);
+                .unwrap_or(1)
+                .min(MAX_SPACE_RUN);
             text.push_str(&" ".repeat(count));
         } else if is(node, &ODF_TEXT_NS, "tab") {
             text.push('\t');
@@ -709,6 +714,20 @@ mod tests {
             ]
         );
         assert_eq!(count_odp(deck).unwrap() as usize, 3);
+    }
+
+    #[test]
+    fn odp_caps_a_space_run_before_allocating_it() {
+        let xml = format!(
+            r#"{ODP_HEAD}<draw:page draw:name="page1"><presentation:notes>
+<draw:frame presentation:class="notes"><draw:text-box><text:p>a<text:s text:c="18446744073709551615"/>b<text:s text:c="3"/>c</text:p></draw:text-box></draw:frame>
+</presentation:notes></draw:page>{ODP_TAIL}"#
+        );
+        let notes = odp(package(&[("content.xml", &xml)])).unwrap()[0]
+            .notes
+            .clone()
+            .unwrap();
+        assert_eq!(notes, format!("a{}b   c", " ".repeat(MAX_SPACE_RUN)));
     }
 
     #[test]
