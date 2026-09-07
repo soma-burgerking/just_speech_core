@@ -1,5 +1,7 @@
-//! Slide counts read from each format's own page list, without rendering.
+//! Slide counts and speaker notes read from each format's own structure,
+//! without rendering.
 
+mod notes;
 mod pdf;
 mod ppt;
 
@@ -23,13 +25,13 @@ pub enum SlideFormat {
 /// OOXML ships two conformance classes and PowerPoint offers both in its save
 /// dialog; only the namespace tells them apart. Everything the count reads —
 /// `sldIdLst`, `sldId` — is spelled the same under either.
-const PRESENTATIONML_NS: [&str; 2] = [
+pub(crate) const PRESENTATIONML_NS: [&str; 2] = [
     "http://schemas.openxmlformats.org/presentationml/2006/main",
     "http://purl.oclc.org/ooxml/presentationml/main",
 ];
 
 /// Fixed across ODF versions — the `1.0` names the namespace, not the format.
-const ODF_DRAWING_NS: [&str; 1] = ["urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"];
+pub(crate) const ODF_DRAWING_NS: [&str; 1] = ["urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"];
 
 impl SlideFormat {
     /// The format a file extension names, case-insensitively; the extensions
@@ -42,6 +44,11 @@ impl SlideFormat {
             "pdf" => Some(Self::Pdf),
             _ => None,
         }
+    }
+
+    /// PPT keeps notes in encoded text records and a PDF has none.
+    pub fn supports_notes(self) -> bool {
+        matches!(self, Self::Pptx | Self::Odp)
     }
 }
 
@@ -58,6 +65,29 @@ pub fn count_slides_in<R: Read + Seek>(reader: R, format: SlideFormat) -> Result
         SlideFormat::Odp => count_odp(reader),
         SlideFormat::Pdf => pdf::count_pages(reader),
         SlideFormat::Ppt => ppt::count_slides(reader),
+    }
+}
+
+/// Speaker notes per slide: index `i` is slide `i + 1` as [count_slides]
+/// numbers them (hidden slides included), `None` where a slide has none.
+/// `Err` for a format without stored notes ([SlideFormat::supports_notes]) or
+/// a file that can't be read as `format`.
+pub fn speaker_notes(path: &Path, format: SlideFormat) -> Result<Vec<Option<String>>> {
+    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    speaker_notes_in(file, format)
+}
+
+/// [speaker_notes] over an open source; the browser build has no filesystem.
+pub fn speaker_notes_in<R: Read + Seek>(
+    reader: R,
+    format: SlideFormat,
+) -> Result<Vec<Option<String>>> {
+    match format {
+        SlideFormat::Pptx => notes::pptx(reader),
+        SlideFormat::Odp => notes::odp(reader),
+        SlideFormat::Ppt | SlideFormat::Pdf => {
+            bail!("{format:?} carries no readable speaker notes")
+        }
     }
 }
 
