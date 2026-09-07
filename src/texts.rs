@@ -332,16 +332,24 @@ fn parse<'a>(xml: &'a str, part: &str) -> Result<Document<'a>> {
         .with_context(|| format!("{part} is not well-formed XML"))
 }
 
-/// One open zip, read part by part. A part over the upload cap is refused
-/// before it is inflated, as in the counter.
+/// One open zip, read part by part. The parts share one inflation budget, the
+/// upload cap: the counter reads a single part, but the texts open up to three
+/// per slide, and a per-part cap would let a small package inflate hundreds of
+/// times that. A legitimate deck's XML sums to a fraction of it.
 struct Package<R: Read + Seek> {
     archive: ZipArchive<R>,
+    budget: u64,
 }
 
 impl<R: Read + Seek> Package<R> {
     fn open(reader: R) -> Result<Self> {
+        Self::with_budget(reader, MAX_PRESENTATION_FILE_BYTES)
+    }
+
+    fn with_budget(reader: R, budget: u64) -> Result<Self> {
         Ok(Self {
             archive: ZipArchive::new(reader).context("not a zip package")?,
+            budget,
         })
     }
 
@@ -359,12 +367,13 @@ impl<R: Read + Seek> Package<R> {
         };
         let mut xml = String::new();
         entry
-            .take(MAX_PRESENTATION_FILE_BYTES + 1)
+            .take(self.budget + 1)
             .read_to_string(&mut xml)
             .with_context(|| format!("{name} is not UTF-8 text"))?;
-        if xml.len() as u64 > MAX_PRESENTATION_FILE_BYTES {
-            bail!("{name} exceeds {MAX_PRESENTATION_FILE_BYTES} bytes");
+        if xml.len() as u64 > self.budget {
+            bail!("{name} exceeds the package's {MAX_PRESENTATION_FILE_BYTES}-byte text budget");
         }
+        self.budget -= xml.len() as u64;
         Ok(Some(xml))
     }
 }
@@ -723,7 +732,24 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_part_is_refused_and_a_missing_one_is_none() {
+    fn parts_share_one_inflation_budget() {
+        // Each part fits the budget alone; together they do not, so the second
+        // read is refused without inflating it.
+        let zip = package(&[("a.xml", "<a/>"), ("b.xml", "<b/>")]);
+        let mut package = Package::with_budget(zip.clone(), 6).unwrap();
+        assert_eq!(package.text("a.xml").unwrap().as_deref(), Some("<a/>"));
+        assert!(package
+            .text("b.xml")
+            .unwrap_err()
+            .to_string()
+            .contains("budget"));
+        let mut package = Package::with_budget(zip, 8).unwrap();
+        assert!(package.text("a.xml").unwrap().is_some());
+        assert!(package.text("b.xml").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_missing_part_is_none_and_a_required_one_names_itself() {
         let mut package = Package::open(package(&[("a.xml", "<a/>")])).unwrap();
         assert_eq!(package.text("a.xml").unwrap().as_deref(), Some("<a/>"));
         assert!(package.text("b.xml").unwrap().is_none());
