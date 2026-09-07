@@ -1,6 +1,6 @@
-//! Speaker notes read from the deck's own XML, without rendering. Only the
-//! zip-packaged formats store notes as text the deck itself carries; the binary
-//! PPT keeps them in encoded text records and a PDF has none.
+//! Slide titles and speaker notes read from the deck's own XML, without
+//! rendering. Only the zip-packaged formats store them as text the deck itself
+//! carries; the binary PPT keeps text in encoded records and a PDF has none.
 
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -10,7 +10,7 @@ use roxmltree::{Document, Node};
 use zip::result::ZipError;
 use zip::ZipArchive;
 
-use crate::{MAX_PRESENTATION_FILE_BYTES, ODF_DRAWING_NS, PRESENTATIONML_NS};
+use crate::{SlideText, MAX_PRESENTATION_FILE_BYTES, ODF_DRAWING_NS, PRESENTATIONML_NS};
 
 /// DrawingML, in the same two conformance classes as PresentationML.
 const DRAWINGML_NS: [&str; 2] = [
@@ -31,10 +31,9 @@ const PACKAGE_RELATIONSHIPS_NS: [&str; 1] =
 const ODF_PRESENTATION_NS: [&str; 1] = ["urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"];
 const ODF_TEXT_NS: [&str; 1] = ["urn:oasis:names:tc:opendocument:xmlns:text:1.0"];
 
-/// Notes per slide of a PPTX, in `sldIdLst` order (hidden slides included, as
-/// the count and the render). A slide whose notes part is missing or holds no
-/// text is `None`.
-pub(crate) fn pptx<R: Read + Seek>(reader: R) -> Result<Vec<Option<String>>> {
+/// One entry per slide of a PPTX, in `sldIdLst` order (hidden slides included,
+/// as the count and the render).
+pub(crate) fn pptx<R: Read + Seek>(reader: R) -> Result<Vec<SlideText>> {
     let mut package = Package::open(reader)?;
     let presentation = package.required("ppt/presentation.xml")?;
     let slide_ids = slide_relationship_ids(&presentation)?;
@@ -44,15 +43,39 @@ pub(crate) fn pptx<R: Read + Seek>(reader: R) -> Result<Vec<Option<String>>> {
     let rels = package.required("ppt/_rels/presentation.xml.rels")?;
     let slide_parts = relationships(&rels, "ppt", "/slide")?;
 
-    let mut notes = Vec::with_capacity(slide_ids.len());
+    let mut texts = Vec::with_capacity(slide_ids.len());
     for id in slide_ids {
         let part = id.as_deref().and_then(|id| slide_parts.get(id));
-        notes.push(match part {
-            Some(part) => slide_notes(&mut package, part)?,
-            None => None,
+        texts.push(match part {
+            Some(part) => slide_text(&mut package, part)?,
+            None => SlideText::default(),
         });
     }
-    Ok(notes)
+    Ok(texts)
+}
+
+fn slide_text<R: Read + Seek>(package: &mut Package<R>, part: &str) -> Result<SlideText> {
+    let title = match package.text(part)? {
+        Some(xml) => title_text(&xml, part)?,
+        None => None,
+    };
+    Ok(SlideText {
+        title,
+        notes: slide_notes(package, part)?,
+    })
+}
+
+/// The title placeholder (`ctrTitle` on a title slide); a title typed into a
+/// plain text box is indistinguishable from body text and stays `None`.
+fn title_text(xml: &str, part: &str) -> Result<Option<String>> {
+    let doc = parse(xml, part)?;
+    let title = doc
+        .descendants()
+        .filter(|node| is(*node, &PRESENTATIONML_NS, "sp"))
+        .filter(|shape| matches!(placeholder_type(*shape), Some("title" | "ctrTitle")))
+        .map(|shape| one_line(text_body_paragraphs(shape)))
+        .find(|title| !title.is_empty());
+    Ok(title)
 }
 
 /// The `r:id` of each `sldId` in the main slide list, in order; `None` for an
@@ -101,27 +124,30 @@ fn slide_notes<R: Read + Seek>(package: &mut Package<R>, part: &str) -> Result<O
 /// date placeholders are the page furniture around the notes.
 fn notes_body_text(xml: &str, part: &str) -> Result<Option<String>> {
     let doc = parse(xml, part)?;
-    let mut lines = Vec::new();
-    for shape in doc
+    let lines = doc
         .descendants()
         .filter(|node| is(*node, &PRESENTATIONML_NS, "sp"))
-    {
-        let is_body = shape.descendants().any(|node| {
-            is(node, &PRESENTATIONML_NS, "ph") && node.attribute("type") == Some("body")
-        });
-        if !is_body {
-            continue;
-        }
-        for body in shape
-            .children()
-            .filter(|node| is(*node, &PRESENTATIONML_NS, "txBody"))
-        {
-            for paragraph in body.children().filter(|node| is(*node, &DRAWINGML_NS, "p")) {
-                lines.push(drawingml_paragraph(paragraph));
-            }
-        }
-    }
+        .filter(|shape| placeholder_type(*shape) == Some("body"))
+        .flat_map(text_body_paragraphs)
+        .collect();
     Ok(text_or_none(lines))
+}
+
+/// A `ph` without `type` is an object placeholder, never a title or body.
+fn placeholder_type<'a>(shape: Node<'a, '_>) -> Option<&'a str> {
+    shape
+        .descendants()
+        .find(|node| is(*node, &PRESENTATIONML_NS, "ph"))
+        .and_then(|ph| ph.attribute("type"))
+}
+
+fn text_body_paragraphs(shape: Node) -> Vec<String> {
+    shape
+        .children()
+        .filter(|node| is(*node, &PRESENTATIONML_NS, "txBody"))
+        .flat_map(|body| body.children().filter(|node| is(*node, &DRAWINGML_NS, "p")))
+        .map(drawingml_paragraph)
+        .collect()
 }
 
 fn drawingml_paragraph(paragraph: Node) -> String {
@@ -189,9 +215,8 @@ fn resolve_part(base_dir: &str, target: &str) -> String {
     resolved.join("/")
 }
 
-/// Notes per page of an ODP, in `content.xml` order. A page whose notes frames
-/// hold no text is `None`.
-pub(crate) fn odp<R: Read + Seek>(reader: R) -> Result<Vec<Option<String>>> {
+/// One entry per page of an ODP, in `content.xml` order.
+pub(crate) fn odp<R: Read + Seek>(reader: R) -> Result<Vec<SlideText>> {
     let mut package = Package::open(reader)?;
     let content = package.required("content.xml")?;
     let doc = parse(&content, "content.xml")?;
@@ -205,8 +230,24 @@ pub(crate) fn odp<R: Read + Seek>(reader: R) -> Result<Vec<Option<String>>> {
     Ok(doc
         .descendants()
         .filter(|node| is(*node, &ODF_DRAWING_NS, "page"))
-        .map(page_notes)
+        .map(|page| SlideText {
+            title: page_title(page),
+            notes: page_notes(page),
+        })
         .collect())
+}
+
+fn page_title(page: Node) -> Option<String> {
+    page.descendants()
+        .filter(|node| is(*node, &ODF_DRAWING_NS, "frame"))
+        .filter(|frame| frame_class(*frame) == Some("title"))
+        .filter(|frame| {
+            !frame
+                .ancestors()
+                .any(|node| is(node, &ODF_PRESENTATION_NS, "notes"))
+        })
+        .map(|frame| one_line(frame_paragraphs(frame)))
+        .find(|title| !title.is_empty())
 }
 
 /// Header, footer, date-time and page-number frames sit on the notes page
@@ -216,25 +257,27 @@ fn page_notes(page: Node) -> Option<String> {
     let notes = page
         .children()
         .find(|node| is(*node, &ODF_PRESENTATION_NS, "notes"))?;
-    let mut lines = Vec::new();
-    for frame in notes
+    let lines = notes
         .descendants()
         .filter(|node| is(*node, &ODF_DRAWING_NS, "frame"))
-    {
-        let class = ODF_PRESENTATION_NS
-            .iter()
-            .find_map(|ns| frame.attribute((*ns, "class")));
-        if !matches!(class, None | Some("notes")) {
-            continue;
-        }
-        for paragraph in frame
-            .descendants()
-            .filter(|node| is(*node, &ODF_TEXT_NS, "p"))
-        {
-            lines.push(odf_paragraph(paragraph));
-        }
-    }
+        .filter(|frame| matches!(frame_class(*frame), None | Some("notes")))
+        .flat_map(frame_paragraphs)
+        .collect();
     text_or_none(lines)
+}
+
+fn frame_class<'a>(frame: Node<'a, '_>) -> Option<&'a str> {
+    ODF_PRESENTATION_NS
+        .iter()
+        .find_map(|ns| frame.attribute((*ns, "class")))
+}
+
+fn frame_paragraphs(frame: Node) -> Vec<String> {
+    frame
+        .descendants()
+        .filter(|node| is(*node, &ODF_TEXT_NS, "p"))
+        .map(odf_paragraph)
+        .collect()
 }
 
 /// ODF spells whitespace as elements: `s` (`c` spaces), `tab`, `line-break`.
@@ -264,6 +307,14 @@ fn text_or_none(lines: Vec<String>) -> Option<String> {
     let text = lines.join("\n");
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn one_line(paragraphs: Vec<String>) -> String {
+    paragraphs
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn is(node: Node, namespaces: &[&str], name: &str) -> bool {
@@ -341,6 +392,13 @@ mod tests {
         cursor
     }
 
+    fn text(title: Option<&str>, notes: Option<&str>) -> SlideText {
+        SlideText {
+            title: title.map(str::to_owned),
+            notes: notes.map(str::to_owned),
+        }
+    }
+
     const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
     const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
     const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -371,6 +429,21 @@ mod tests {
         format!(r#"<Relationships xmlns="{REL_NS}">{body}</Relationships>"#)
     }
 
+    /// A slide part: a placeholder of [ph_type] holding [paragraphs], plus the
+    /// subtitle and content placeholders that must never read as the title.
+    fn slide_part(p_ns: &str, a_ns: &str, ph_type: &str, paragraphs: &str) -> String {
+        format!(
+            r#"<p:sld xmlns:a="{a_ns}" xmlns:p="{p_ns}"><p:cSld><p:spTree>
+<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:nvPr><p:ph type="{ph_type}"/></p:nvPr></p:nvSpPr>
+<p:txBody><a:bodyPr/>{paragraphs}</p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="3" name="Subtitle 2"/><p:nvPr><p:ph type="subTitle" idx="1"/></p:nvPr></p:nvSpPr>
+<p:txBody><a:p><a:r><a:t>부제</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="4" name="Content 3"/><p:nvPr><p:ph idx="2"/></p:nvPr></p:nvSpPr>
+<p:txBody><a:p><a:r><a:t>본문</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>"#
+        )
+    }
+
     /// A notes part as PowerPoint writes it: slide image, body, slide number.
     fn notes_part(p_ns: &str, a_ns: &str, body: &str) -> String {
         format!(
@@ -385,9 +458,10 @@ mod tests {
     }
 
     #[test]
-    fn pptx_reads_body_text_per_slide_in_slide_list_order() {
-        // The list names slide2 first; slide1's notes carry two runs, an
-        // entity, and a paragraph with a break; slide2's placeholder is empty.
+    fn pptx_reads_title_and_notes_per_slide_in_slide_list_order() {
+        // The list names slide2 first. slide1: a centered title over two
+        // paragraphs, notes with two runs, an entity and a break. slide2: a
+        // title with a break, an empty notes placeholder.
         let deck = package(&[
             (
                 "ppt/presentation.xml",
@@ -402,6 +476,24 @@ mod tests {
                         ("rId2", "slide", "slides/slide1.xml"),
                         ("rId3", "slide", "/ppt/slides/slide2.xml"),
                     ],
+                ),
+            ),
+            (
+                "ppt/slides/slide1.xml",
+                &slide_part(
+                    P_NS,
+                    A_NS,
+                    "ctrTitle",
+                    r#"<a:p><a:r><a:t>발표 </a:t></a:r><a:r><a:t>제목</a:t></a:r></a:p><a:p><a:r><a:t>2026</a:t></a:r></a:p>"#,
+                ),
+            ),
+            (
+                "ppt/slides/slide2.xml",
+                &slide_part(
+                    P_NS,
+                    A_NS,
+                    "title",
+                    r#"<a:p><a:r><a:t>시장</a:t></a:r><a:br/><a:r><a:t>분석</a:t></a:r></a:p>"#,
                 ),
             ),
             (
@@ -438,8 +530,11 @@ mod tests {
         assert_eq!(
             pptx(deck.clone()).unwrap(),
             vec![
-                None,
-                Some("안녕하세요, 시작합니다 & 환영합니다.\n첫 줄\n둘째 줄".to_owned()),
+                text(Some("시장 분석"), None),
+                text(
+                    Some("발표 제목 2026"),
+                    Some("안녕하세요, 시작합니다 & 환영합니다.\n첫 줄\n둘째 줄"),
+                ),
             ]
         );
         assert_eq!(count_pptx(deck).unwrap() as usize, 2);
@@ -457,6 +552,15 @@ mod tests {
                 &rels(r_ns, &[("rId2", "slide", "slides/slide1.xml")]),
             ),
             (
+                "ppt/slides/slide1.xml",
+                &slide_part(
+                    p_ns,
+                    a_ns,
+                    "title",
+                    r#"<a:p><a:r><a:t>Strict</a:t></a:r></a:p>"#,
+                ),
+            ),
+            (
                 "ppt/slides/_rels/slide1.xml.rels",
                 &rels(
                     r_ns,
@@ -468,13 +572,17 @@ mod tests {
                 &notes_part(p_ns, a_ns, r#"<a:p><a:r><a:t>strict</a:t></a:r></a:p>"#),
             ),
         ]);
-        assert_eq!(pptx(deck).unwrap(), vec![Some("strict".to_owned())]);
+        assert_eq!(
+            pptx(deck).unwrap(),
+            vec![text(Some("Strict"), Some("strict"))]
+        );
     }
 
     #[test]
-    fn pptx_slides_without_a_notes_part_are_none() {
-        // slide1 has no .rels at all; slide2's .rels names no notes part;
-        // slide3's list entry has no r:id.
+    fn pptx_slides_without_text_parts_are_empty() {
+        // slide1 has neither part nor .rels; slide2's title placeholder is
+        // blank and its .rels names no notes part; slide3's list entry has no
+        // r:id.
         let xml = format!(
             r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst>
 <p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/><p:sldId id="258"/>
@@ -493,6 +601,10 @@ mod tests {
                 ),
             ),
             (
+                "ppt/slides/slide2.xml",
+                &slide_part(P_NS, A_NS, "title", r#"<a:p><a:endParaRPr/></a:p>"#),
+            ),
+            (
                 "ppt/slides/_rels/slide2.xml.rels",
                 &rels(
                     R_NS,
@@ -500,14 +612,14 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(pptx(deck).unwrap(), vec![None, None, None]);
+        assert_eq!(pptx(deck).unwrap(), vec![text(None, None); 3]);
     }
 
     #[test]
-    fn pptx_with_an_empty_slide_list_has_no_notes() {
+    fn pptx_with_an_empty_slide_list_has_no_text() {
         let xml = format!(r#"<p:presentation xmlns:p="{P_NS}"><p:sldIdLst/></p:presentation>"#);
         let deck = package(&[("ppt/presentation.xml", &xml)]);
-        assert_eq!(pptx(deck).unwrap(), Vec::<Option<String>>::new());
+        assert_eq!(pptx(deck).unwrap(), Vec::<SlideText>::new());
     }
 
     #[test]
@@ -556,13 +668,15 @@ mod tests {
     const ODP_TAIL: &str = "</office:presentation></office:body></office:document-content>";
 
     #[test]
-    fn odp_reads_notes_frames_per_page() {
-        // page1: a list and a paragraph with spelled-out whitespace, plus a
-        // header frame that is furniture; page2: an empty notes frame; page3:
-        // no notes element at all.
+    fn odp_reads_title_and_notes_frames_per_page() {
+        // page1: a title frame over two paragraphs and a subtitle that is not
+        // one; notes with a list, spelled-out whitespace, and a header frame
+        // that is furniture. page2: an empty notes frame. page3: nothing.
         let xml = format!(
             r#"{ODP_HEAD}
-<draw:page draw:name="page1"><draw:frame/>
+<draw:page draw:name="page1">
+  <draw:frame presentation:class="title"><draw:text-box><text:p>첫</text:p><text:p>장</text:p></draw:text-box></draw:frame>
+  <draw:frame presentation:class="subtitle"><draw:text-box><text:p>부제</text:p></draw:text-box></draw:frame>
   <presentation:notes><draw:page-thumbnail/>
     <draw:frame presentation:class="header"><draw:text-box><text:p>Header</text:p></draw:text-box></draw:frame>
     <draw:frame presentation:class="notes"><draw:text-box>
@@ -579,7 +693,11 @@ mod tests {
         let deck = package(&[("content.xml", &xml)]);
         assert_eq!(
             odp(deck.clone()).unwrap(),
-            vec![Some("첫  항목\n둘째\n줄\t끝".to_owned()), None, None]
+            vec![
+                text(Some("첫 장"), Some("첫  항목\n둘째\n줄\t끝")),
+                text(None, None),
+                text(None, None),
+            ]
         );
         assert_eq!(count_odp(deck).unwrap() as usize, 3);
     }
@@ -593,7 +711,7 @@ mod tests {
         );
         assert_eq!(
             odp(package(&[("content.xml", &xml)])).unwrap(),
-            vec![Some("plain".to_owned())]
+            vec![text(None, Some("plain"))]
         );
     }
 

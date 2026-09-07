@@ -1,9 +1,9 @@
 //! Slide counts and speaker notes read from each format's own structure,
 //! without rendering.
 
-mod notes;
 mod pdf;
 mod ppt;
+mod texts;
 
 use std::borrow::Cow;
 use std::fs::File;
@@ -46,7 +46,8 @@ impl SlideFormat {
         }
     }
 
-    /// PPT keeps notes in encoded text records and a PDF has none.
+    /// Whether [slide_texts] can read the format: PPT keeps its text in
+    /// encoded records and a PDF has no titles or notes.
     pub fn supports_notes(self) -> bool {
         matches!(self, Self::Pptx | Self::Odp)
     }
@@ -68,26 +69,29 @@ pub fn count_slides_in<R: Read + Seek>(reader: R, format: SlideFormat) -> Result
     }
 }
 
-/// Speaker notes per slide: index `i` is slide `i + 1` as [count_slides]
-/// numbers them (hidden slides included), `None` where a slide has none.
-/// `Err` for a format without stored notes ([SlideFormat::supports_notes]) or
-/// a file that can't be read as `format`.
-pub fn speaker_notes(path: &Path, format: SlideFormat) -> Result<Vec<Option<String>>> {
-    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    speaker_notes_in(file, format)
+/// The text a deck stores for one slide: its title placeholder and its speaker
+/// notes (paragraphs joined by `\n`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SlideText {
+    pub title: Option<String>,
+    pub notes: Option<String>,
 }
 
-/// [speaker_notes] over an open source; the browser build has no filesystem.
-pub fn speaker_notes_in<R: Read + Seek>(
-    reader: R,
-    format: SlideFormat,
-) -> Result<Vec<Option<String>>> {
+/// One [SlideText] per slide: index `i` is slide `i + 1` as [count_slides]
+/// numbers them (hidden slides included). `Err` for a format without stored
+/// text ([SlideFormat::supports_notes]) or a file that can't be read as
+/// `format`.
+pub fn slide_texts(path: &Path, format: SlideFormat) -> Result<Vec<SlideText>> {
+    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    slide_texts_in(file, format)
+}
+
+/// [slide_texts] over an open source; the browser build has no filesystem.
+pub fn slide_texts_in<R: Read + Seek>(reader: R, format: SlideFormat) -> Result<Vec<SlideText>> {
     match format {
-        SlideFormat::Pptx => notes::pptx(reader),
-        SlideFormat::Odp => notes::odp(reader),
-        SlideFormat::Ppt | SlideFormat::Pdf => {
-            bail!("{format:?} carries no readable speaker notes")
-        }
+        SlideFormat::Pptx => texts::pptx(reader),
+        SlideFormat::Odp => texts::odp(reader),
+        SlideFormat::Ppt | SlideFormat::Pdf => bail!("{format:?} carries no readable slide text"),
     }
 }
 
