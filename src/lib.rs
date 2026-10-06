@@ -45,12 +45,6 @@ impl SlideFormat {
             _ => None,
         }
     }
-
-    /// Whether [slide_texts] can read the format: PPT keeps its text in
-    /// encoded records and a PDF has no titles or notes.
-    pub fn supports_notes(self) -> bool {
-        matches!(self, Self::Pptx | Self::Odp)
-    }
 }
 
 /// Hidden slides are counted, as the server render does.
@@ -79,8 +73,7 @@ pub struct SlideText {
 
 /// One [SlideText] per slide: index `i` is slide `i + 1` as [count_slides]
 /// numbers them (hidden slides included). `Err` for a format without stored
-/// text ([SlideFormat::supports_notes]) or a file that can't be read as
-/// `format`.
+/// text (PPT, PDF) or a file that can't be read as `format`.
 pub fn slide_texts(path: &Path, format: SlideFormat) -> Result<Vec<SlideText>> {
     let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     slide_texts_in(file, format)
@@ -95,10 +88,9 @@ pub fn slide_texts_in<R: Read + Seek>(reader: R, format: SlideFormat) -> Result<
     }
 }
 
-/// The server's upload cap (just_speech_api MAX_UPLOAD_BYTES; the app's
-/// kMaxPresentationFileBytes and the web's MAX_PRESENTATION_FILE_BYTES): a
-/// file past it is refused before upload, so a part larger than the largest
-/// accepted file is a zip bomb, not a deck, and is never inflated into memory.
+/// The server's upload cap (just_speech_api MAX_UPLOAD_BYTES): a file past it is
+/// refused before upload, so a part larger than any accepted file is a zip bomb
+/// and is never inflated into memory.
 pub const MAX_PRESENTATION_FILE_BYTES: u64 = 100 << 20;
 
 /// Only the `sldIdLst` in the main namespace: section lists (`p14`) repeat
@@ -159,10 +151,9 @@ fn read_zip_entry<R: Read + Seek>(reader: R, entry: &str) -> Result<String> {
     read_zip_entry_within(reader, entry, MAX_PRESENTATION_FILE_BYTES)
 }
 
-/// Declarations binding any of [uris], capturing the prefix each binds it to
-/// (none for the default namespace). Both quote characters and whitespace
-/// around the `=` are legal XML, and missing one reads as a deck with no slide
-/// list.
+/// Declarations binding any of [uris], with the prefix each binds (none for the
+/// default namespace). Either quote and whitespace around `=` are legal XML; a
+/// missed one reads as a deck with no slide list.
 fn namespace_declarations(uris: &[&str]) -> Regex {
     let any = uris
         .iter()
@@ -175,10 +166,9 @@ fn namespace_declarations(uris: &[&str]) -> Regex {
     .unwrap()
 }
 
-/// Comments and CDATA blanked — the only text the element regexes below can
-/// mistake for markup, since an attribute value cannot hold a bare `<`. With
-/// them gone every `<prefix:name` left is a real element. Borrows when there is
-/// nothing to strip: the entry may be 100MB.
+/// Comments and CDATA blanked: the only text the element regexes could mistake
+/// for markup, since an attribute value cannot hold a bare `<`. Borrows when
+/// there is nothing to strip, as the entry may be 100MB.
 fn without_unparsed_text(xml: &str) -> Cow<'_, str> {
     static UNPARSED: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"(?s)<!--.*?-->|<!\[CDATA\[.*?\]\]>").unwrap());
