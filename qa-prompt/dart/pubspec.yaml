@@ -1,0 +1,9 @@
+name: just_speech_qa_prompt
+description: The Q&A system prompt, as the server builds it.
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+dev_dependencies:
+  test: ^1.29.0
