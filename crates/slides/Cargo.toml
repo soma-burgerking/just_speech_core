@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Nothing app-only here: crates/slides-wasm compiles this crate for wasm32-unknown-unknown.
+# Nothing app-only here: wasm/ compiles this crate for wasm32-unknown-unknown.
 [dependencies]
 anyhow = "1.0.100"
 cfb = "0.14.0"

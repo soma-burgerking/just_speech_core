@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # lopdf's encryption code (unused by counting) pulls rand; getrandom needs a backend named for wasm32.
 lopdf = { version = "0.44.0", default-features = false, features = ["wasm_js"] }
-slides = { path = "../slides" }
+slides = { path = "../crates/slides" }
 wasm-bindgen = "0.2"
 
 [profile.release]
