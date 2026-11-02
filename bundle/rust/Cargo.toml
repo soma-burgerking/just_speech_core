@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Nothing app-only here: the web reads and writes the same files through wasm.
+# Nothing app-only here: the render worker reads the same files through wasm.
 [dependencies]
 anyhow = "1.0.100"
 serde = { version = "1.0.228", features = ["derive"] }

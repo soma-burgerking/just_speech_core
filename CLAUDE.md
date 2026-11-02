@@ -6,7 +6,7 @@
 | 기능 | 구현 | 쓰는 곳 |
 | --- | --- | --- |
 | `slides/` — 발표 파일(pptx·ppt·odp·pdf)의 슬라이드 수·제목·발표자 노트 | `rust/`, `wasm/`(웹용 cdylib) | 앱(FFI), 웹(wasm) |
-| `bundle/` — `.justspeech` 발표 묶음 읽기·쓰기, 형식은 `bundle/JUSTSPEECH_FORMAT.md` | `rust/`, `wasm/`(읽기만) | 앱(FFI), 웹·워커(wasm) |
+| `bundle/` — `.justspeech` 발표 묶음 읽기·쓰기, 형식은 `bundle/JUSTSPEECH_FORMAT.md` | `rust/`, `wasm/`(읽기만) | 앱(FFI), 워커(wasm) |
 
 ## 무엇을 여기에 두나
 
@@ -22,7 +22,7 @@ TS로 각각 쓴 대본 규칙 같은 것)는 두지 않는다 — 그것은 각
   필요 없다.
   - 앱: `rust/Cargo.toml`의 경로 의존(`../core/<기능>/rust`).
   - 웹·워커: `<기능>/wasm/build.sh`가 설치한 산출물을 커밋해 쓴다 — 빌드·테스트에 Rust 툴체인이 필요 없다.
-    `slides`는 웹 checkout 경로를, `bundle`은 설치할 디렉터리를 받는다.
+    `slides`(웹)는 웹 checkout 경로를, `bundle`(워커)은 설치할 디렉터리를 받는다.
 - 여기를 바꾸면 쓰는 쪽을 올린다: 앱의 submodule 커밋, 웹·워커는 submodule 커밋과 산출물 재설치.
 
 ## 규칙
