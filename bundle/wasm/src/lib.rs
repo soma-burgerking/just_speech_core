@@ -1,5 +1,5 @@
-//! The `.justspeech` reader over a file's bytes, for the web and the render
-//! worker; build.sh installs it.
+//! The `.justspeech` reader over a file's bytes, for the render worker;
+//! build.sh installs it.
 
 use std::io::Cursor;
 
