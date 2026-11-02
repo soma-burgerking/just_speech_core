@@ -1,0 +1,110 @@
+[
+  {
+    "name": "empty",
+    "script": "",
+    "tokens": 0,
+    "lines": 0
+  },
+  {
+    "name": "whitespace only",
+    "script": "   \n\t ",
+    "tokens": 0,
+    "lines": 0
+  },
+  {
+    "name": "two sentences",
+    "script": "안녕하세요. 오늘은 발표를 합니다.",
+    "tokens": 4,
+    "lines": 2
+  },
+  {
+    "name": "a decimal point is not a sentence end",
+    "script": "3.5배 늘었습니다. 다음입니다",
+    "tokens": 3,
+    "lines": 2
+  },
+  {
+    "name": "an ellipsis before a line break ends a sentence",
+    "script": "그래서…\n결론입니다。다음",
+    "tokens": 2,
+    "lines": 2
+  },
+  {
+    "name": "a closing quote stays with its sentence",
+    "script": "He said \"Stop.\" Then left.",
+    "tokens": 5,
+    "lines": 2
+  },
+  {
+    "name": "curly quotes too",
+    "script": "“첫 문장.” 다음 문장.",
+    "tokens": 4,
+    "lines": 2
+  },
+  {
+    "name": "blank lines are one break",
+    "script": "줄 하나\n\n\n줄 둘",
+    "tokens": 4,
+    "lines": 2
+  },
+  {
+    "name": "question and exclamation",
+    "script": "물음표? 느낌표! 끝",
+    "tokens": 3,
+    "lines": 3
+  },
+  {
+    "name": "three dots then a space",
+    "script": "말줄임... 계속",
+    "tokens": 2,
+    "lines": 2
+  },
+  {
+    "name": "a closing bracket after the end",
+    "script": "(참고.) 다음",
+    "tokens": 2,
+    "lines": 2
+  },
+  {
+    "name": "a line break alone breaks a line",
+    "script": "첫 줄\n둘째 줄 문장 끝 없음",
+    "tokens": 7,
+    "lines": 2
+  },
+  {
+    "name": "CRLF",
+    "script": "첫 줄\r\n둘째 줄",
+    "tokens": 4,
+    "lines": 2
+  },
+  {
+    "name": "surrounding space",
+    "script": "  안녕  하세요 \n",
+    "tokens": 2,
+    "lines": 1
+  },
+  {
+    "name": "ideographic space and NBSP separate words",
+    "script": "a　b c",
+    "tokens": 3,
+    "lines": 1
+  },
+  {
+    "name": "a line separator after a sentence end breaks it",
+    "script": "끝. 다음",
+    "tokens": 2,
+    "lines": 2
+  },
+  {
+    "name": "NEL is not whitespace here",
+    "script": "ab\nc\n",
+    "tokens": 3,
+    "lines": 3
+  },
+  {
+    "name": "a BOM is whitespace",
+    "script": "﻿a b",
+    "tokens": 2,
+    "lines": 1
+  }
+]

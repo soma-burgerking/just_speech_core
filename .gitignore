@@ -2,6 +2,6 @@
 /.gradle
 /build
 /qa-prompt/kotlin/build
-/qa-prompt/dart/.dart_tool
-/qa-prompt/dart/pubspec.lock
+/*/dart/.dart_tool
+/*/dart/pubspec.lock
 .DS_Store
