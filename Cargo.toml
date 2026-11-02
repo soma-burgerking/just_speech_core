@@ -1,0 +1,6 @@
+# wasm/ is its own workspace: its size-tuned release profile must not reach
+# the app's build, and cargo only reads profiles at a workspace root.
+[workspace]
+resolver = "2"
+members = ["crates/slides"]
+exclude = ["wasm"]
