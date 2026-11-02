@@ -1,9 +1,0 @@
-name: just_speech_script
-description: Script rules the app and the web apply alike.
-publish_to: none
-
-environment:
-  sdk: ^3.12.0
-
-dev_dependencies:
-  test: ^1.29.0
