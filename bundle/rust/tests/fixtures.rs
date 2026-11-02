@@ -5,6 +5,7 @@
 use std::fs::File;
 
 use bundle::{sniff, BundleReader, SlideMapping, SNIFF_LEN};
+use sha2::{Digest, Sha256};
 
 const V1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v1.justspeech");
 
@@ -39,8 +40,19 @@ fn v1_opens() {
     );
     assert!(bundle.skipped.is_empty());
 
-    let mut deck = Vec::new();
-    assert!(reader.copy_deck(&mut deck).unwrap());
-    assert!(deck.starts_with(b"%PDF-1.4"));
-    assert_eq!(deck.len(), 674);
+    assert_eq!(bundle.slide_count, 3);
+    let hashes = [
+        "d7ddac033f95bab68e97a3f05b978275b4341afd3ec099a61ca6ff37f4d57b90",
+        "2157fa0fccf0d9ee8ddcb49d42d136f5598cab2122885d1c38403817b8e52bb6",
+        "cfde7b04be11702b3c04d4276cfc9f138adbe07408eb34a774c6963c35092657",
+    ];
+    for (i, expected) in hashes.iter().enumerate() {
+        let mut slide = Vec::new();
+        reader.copy_slide(i, &mut slide).unwrap();
+        assert_eq!(hex(&Sha256::digest(&slide)), *expected, "slide {}", i + 1);
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

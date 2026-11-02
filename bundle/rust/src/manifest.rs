@@ -5,7 +5,8 @@ pub(crate) const FORMAT_VERSION: u64 = 1;
 pub(crate) const MIMETYPE_PATH: &str = "mimetype";
 pub(crate) const MANIFEST_PATH: &str = "manifest.json";
 pub(crate) const SCRIPT_PATH: &str = "parts/script.json";
-pub(crate) const DECK_PATH: &str = "parts/deck.pdf";
+pub(crate) const DECK_PATH: &str = "parts/deck.json";
+pub(crate) const SLIDES_DIR: &str = "parts/slides/";
 pub(crate) const MAPPING_PATH: &str = "parts/mapping.json";
 
 pub(crate) const SCRIPT: &str = "script";
@@ -15,7 +16,8 @@ pub(crate) const V1_TYPES: [&str; 3] = [SCRIPT, DECK, SLIDE_MAPPING];
 
 pub(crate) const SCRIPT_SCHEMA: u32 = 1;
 pub(crate) const MAPPING_SCHEMA: u32 = 1;
-pub(crate) const PDF: &str = "application/pdf";
+pub(crate) const DECK_SCHEMA: u32 = 1;
+pub(crate) const PNG: &str = "image/png";
 /// Tokens are `script.text` split on ECMAScript `\s+`, empty pieces dropped:
 /// how the server and the app's `countScriptTokens` count.
 pub(crate) const WHITESPACE: &str = "whitespace";
@@ -24,22 +26,34 @@ pub(crate) const WHITESPACE: &str = "whitespace";
 /// 200s are the render pipeline's slide cap.
 const MAX_TITLE: usize = 255;
 const MAX_MAPPINGS: usize = 200;
-const MAX_SLIDE: u32 = 200;
+pub(crate) const MAX_SLIDE: u32 = 200;
 
-/// Bytes read before a part counts as invalid. The deck's is the render
-/// pipeline's MAX_FILE_MB, so every bundled deck is one the server can render.
+/// A 150 dpi render of an A0 page fits; larger is a decoding bomb for the
+/// devices that show the slide, not a slide.
+const MAX_SLIDE_SIDE: u32 = 8192;
+
+/// The PNG signature and its first chunk, IHDR, through the height.
+pub(crate) const PNG_HEAD_LEN: usize = 24;
+
+/// Bytes read before a part counts as invalid. `file` is the server's
+/// presentation-file upload cap, so every file that opens can be uploaded;
+/// `deck` is the slides together, uncompressed.
 #[derive(Clone, Copy)]
 pub(crate) struct Limits {
+    pub file: u64,
     pub manifest: u64,
     pub script: u64,
     pub mapping: u64,
+    pub deck_index: u64,
     pub deck: u64,
 }
 
 pub(crate) const LIMITS: Limits = Limits {
+    file: 100 << 20,
     manifest: 1 << 20,
     script: 2 << 20,
     mapping: 1 << 20,
+    deck_index: 1 << 20,
     deck: 100 << 20,
 };
 
@@ -86,6 +100,20 @@ pub(crate) struct MappingPart {
     pub mappings: Vec<SlideMapping>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub(crate) struct DeckPart {
+    pub slides: Vec<SlideDecl>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SlideDecl {
+    pub path: String,
+    pub media_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
 /// The server's `SlideMapping`, field for field: whitespace-token range
 /// (0-based, inclusive) and the 1-based slide it shows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +146,19 @@ pub(crate) fn mappings_valid(mappings: &[SlideMapping]) -> bool {
         && mappings.iter().all(|m| {
             (1..=MAX_SLIDE).contains(&m.slide) && m.title.as_deref().is_none_or(title_fits)
         })
+}
+
+/// Checks the PNG header only: decoding is the caller's, which must still
+/// expect a slide that fails to decode.
+pub(crate) fn slide_head_valid(head: &[u8]) -> bool {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if head.len() < PNG_HEAD_LEN || &head[..8] != SIGNATURE || &head[12..16] != b"IHDR" {
+        return false;
+    }
+    let side = |at: usize| u32::from_be_bytes(head[at..at + 4].try_into().unwrap());
+    [side(16), side(20)]
+        .iter()
+        .all(|s| (1..=MAX_SLIDE_SIDE).contains(s))
 }
 
 pub(crate) fn part_id_valid(id: &str) -> bool {
