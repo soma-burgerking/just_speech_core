@@ -1,6 +1,6 @@
-# slides/wasm is its own workspace: its size-tuned release profile must not reach
-# the app's build, and cargo only reads profiles at a workspace root.
+# The wasm crates are their own workspaces: their size-tuned release profiles must
+# not reach the app's build, and cargo only reads profiles at a workspace root.
 [workspace]
 resolver = "2"
 members = ["bundle/rust", "slides/rust"]
-exclude = ["slides/wasm"]
+exclude = ["bundle/wasm", "slides/wasm"]
