@@ -5,6 +5,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::manifest::{Limits, LIMITS};
+use crate::write::write_with;
 use crate::{sniff, write, BundleReader, NewBundle, ReadError, SlideMapping, MIME, SNIFF_LEN};
 
 const SCRIPT_TEXT: &str = "안녕하세요. 오늘은 3분기 실적을 말씀드리겠습니다. 먼저 매출입니다.";
@@ -520,4 +521,61 @@ fn writer_refuses_what_a_reader_would() {
         mappings: &[],
     };
     assert!(write(Cursor::new(Vec::new()), &bundle, None).is_err());
+}
+
+#[test]
+fn writer_refuses_json_past_the_readers_caps() {
+    fn written(bundle: &NewBundle, limits: Limits) -> anyhow::Result<Vec<u8>> {
+        Ok(write_with(Cursor::new(Vec::new()), bundle, None, limits)?.into_inner())
+    }
+    let base = NewBundle {
+        bundle_id: "b1",
+        created_at: "2026-11-02T10:00:00Z",
+        generator: None,
+        title: "t",
+        script: "hi",
+        mappings: &[],
+    };
+    // {"text":"hi"} is 13 bytes: at the cap it is written and read back.
+    let at_cap = Limits {
+        script: 13,
+        ..LIMITS
+    };
+    let bytes = written(&base, at_cap).unwrap();
+    BundleReader::open_with(Cursor::new(bytes), at_cap).unwrap();
+
+    // 15 quotes escape to 30 bytes: under the cap as text, over it as JSON.
+    let quotes = "\"".repeat(15);
+    let escaped = NewBundle {
+        script: &quotes,
+        ..base
+    };
+    let cap = Limits {
+        script: 40,
+        ..LIMITS
+    };
+    assert!(quotes.len() < 40);
+    assert!(written(&escaped, cap).is_err());
+
+    let long_generator = "g".repeat(400);
+    let named = NewBundle {
+        generator: Some(&long_generator),
+        ..base
+    };
+    let small_manifest = Limits {
+        manifest: 300,
+        ..LIMITS
+    };
+    assert!(written(&named, small_manifest).is_err());
+
+    let mappings = [mapping(0, 0, 1), mapping(1, 1, 2)];
+    let mapped = NewBundle {
+        mappings: &mappings,
+        ..base
+    };
+    let small_mapping = Limits {
+        mapping: 30,
+        ..LIMITS
+    };
+    assert!(written(&mapped, small_mapping).is_err());
 }

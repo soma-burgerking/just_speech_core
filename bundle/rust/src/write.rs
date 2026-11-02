@@ -1,6 +1,7 @@
 use std::io::{Read, Seek, Write};
 
 use anyhow::{bail, ensure, Result};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -28,6 +29,16 @@ pub fn write<W: Write + Seek>(
     bundle: &NewBundle,
     deck: Option<&mut dyn Read>,
 ) -> Result<W> {
+    write_with(out, bundle, deck, LIMITS)
+}
+
+/// [write] against the caps a reader opening with `limits` applies.
+pub(crate) fn write_with<W: Write + Seek>(
+    out: W,
+    bundle: &NewBundle,
+    deck: Option<&mut dyn Read>,
+    limits: Limits,
+) -> Result<W> {
     ensure!(!bundle.bundle_id.is_empty(), "empty bundle id");
     ensure!(title_fits(bundle.title), "title too long");
     ensure!(script_valid(bundle.script), "blank script");
@@ -43,12 +54,10 @@ pub fn write<W: Write + Seek>(
     zip.write_all(MIME.as_bytes())?;
 
     zip.start_file(SCRIPT_PATH, deflated)?;
-    serde_json::to_writer(
-        &mut zip,
-        &ScriptPart {
-            text: bundle.script.to_owned(),
-        },
-    )?;
+    let script = ScriptPart {
+        text: bundle.script.to_owned(),
+    };
+    zip.write_all(&json_within(&script, limits.script, "script")?)?;
     let mut parts = vec![PartDecl {
         id: SCRIPT.into(),
         kind: SCRIPT.into(),
@@ -63,7 +72,7 @@ pub fn write<W: Write + Seek>(
     if let Some(deck) = deck {
         // PDF streams are compressed already; deflate would only cost time.
         zip.start_file(DECK_PATH, stored)?;
-        let sha256 = copy_hashed(deck, &mut zip, LIMITS.deck)?;
+        let sha256 = copy_hashed(deck, &mut zip, limits.deck)?;
         parts.push(PartDecl {
             id: DECK.into(),
             kind: DECK.into(),
@@ -82,7 +91,7 @@ pub fn write<W: Write + Seek>(
             token_unit: WHITESPACE.into(),
             mappings: bundle.mappings.to_vec(),
         };
-        serde_json::to_writer(&mut zip, &mapping)?;
+        zip.write_all(&json_within(&mapping, limits.mapping, "mapping")?)?;
         parts.push(PartDecl {
             id: SLIDE_MAPPING.into(),
             kind: SLIDE_MAPPING.into(),
@@ -105,8 +114,16 @@ pub fn write<W: Write + Seek>(
         title: bundle.title.into(),
         parts,
     };
-    serde_json::to_writer(&mut zip, &manifest)?;
+    zip.write_all(&json_within(&manifest, limits.manifest, "manifest")?)?;
     Ok(zip.finish()?)
+}
+
+/// The reader caps a part by its uncompressed bytes, which JSON escaping can
+/// make several times the text it carries.
+fn json_within(value: &impl Serialize, cap: u64, part: &str) -> Result<Vec<u8>> {
+    let json = serde_json::to_vec(value)?;
+    ensure!(json.len() as u64 <= cap, "{part} over {cap} bytes");
+    Ok(json)
 }
 
 fn copy_hashed(from: &mut dyn Read, to: &mut impl Write, cap: u64) -> Result<String> {
