@@ -2,5 +2,5 @@
 # the app's build, and cargo only reads profiles at a workspace root.
 [workspace]
 resolver = "2"
-members = ["crates/slides"]
+members = ["crates/bundle", "crates/slides"]
 exclude = ["wasm"]
