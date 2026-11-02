@@ -9,15 +9,18 @@
 | `slides/` — 발표 파일(pptx·ppt·odp·pdf)의 슬라이드 수·제목·발표자 노트 | `rust/`, `wasm/`(웹용 cdylib) | 앱(FFI), 웹(wasm) |
 | `bundle/` — `.justspeech` 발표 묶음 읽기·쓰기, 형식은 `bundle/JUSTSPEECH_FORMAT.md` | `rust/` | 앱(FFI) |
 | `qa-prompt/` — Q&A 답변 생성 시스템 프롬프트 | `kotlin/`, `dart/`, `vectors/` | 서버, 앱(기기 전용 발표의 직접 연결) |
+| `script/` — 대본 규칙: 단어 수, 문장 수(`scriptLineCount`), 문장 끝 | `dart/`, `ts/`, `vectors/` | 앱, 웹 |
 
 ## 쓰는 쪽
 
-- 앱·서버는 이 저장소를 submodule `core/`로 둔다(URL은 상대 경로 `../just_speech_core.git`).
+- 앱·서버·웹은 이 저장소를 submodule `core/`로 둔다(URL은 상대 경로 `../just_speech_core.git`).
+  공개 저장소라 쓰는 쪽 CI는 체크아웃에 `submodules: true`만 있으면 된다.
   - 앱: Rust는 `rust/Cargo.toml`의 경로 의존(`../core/<기능>/rust`), Dart는 `pubspec.yaml`의 경로 의존
     (`core/<기능>/dart`).
   - 서버: `settings.gradle.kts`의 `includeBuild("core")`. 의존은 `kr.justspeech.core:<기능>`이다. 서버 이미지는
     Docker 안에서 빌드하므로, Kotlin 구현이 있는 기능을 추가하면 서버 `Dockerfile`의 `COPY`에도 넣는다.
-- 웹은 `slides/wasm/build.sh <just_speech_web 경로>`가 설치한 산출물을 쓴다 — 웹 저장소에는 산출물만 있다.
+- 웹: TS 구현은 경로 별칭 `@core/<기능>/ts`로 그대로 가져다 쓰고, wasm은 `slides/wasm/build.sh <just_speech_web 경로>`가
+  설치한 산출물을 커밋해 쓴다.
 - 여기를 바꾸면 쓰는 쪽을 올린다: 앱·서버는 submodule 커밋, 웹은 산출물 재설치. 출력이 바뀌는 변경은 쓰는
   쪽을 모두 올려야 같은 답을 낸다. 서버(main = 운영)가 함께 바뀌면 서버를 먼저 배포한다.
 
@@ -34,4 +37,5 @@
     `cargo test --workspace`
   - Kotlin: `./gradlew test`
   - Dart: 각 `dart/`에서 `dart test`
+  - TS: `node --test '<기능>/ts/*.test.ts'`(Node 24가 타입을 지우고 바로 돌린다 — `ts/`에는 지울 수 있는 문법만 쓴다)
 - 주석은 코드가 스스로 말하지 못하는 제약만 영어로 적고, 변경 이력은 쓰지 않는다. 문서는 현재 상태만 적는다.

@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        package: [qa-prompt/dart]
+        package: [qa-prompt/dart, script/dart]
     defaults:
       run:
         working-directory: ${{ matrix.package }}
@@ -48,3 +48,12 @@ jobs:
           sdk: "3.12.2"
       - run: dart pub get
       - run: dart test
+
+  ts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test '*/ts/*.test.ts'
