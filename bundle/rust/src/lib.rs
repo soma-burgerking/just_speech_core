@@ -1,5 +1,5 @@
 //! The `.justspeech` presentation bundle: one presentation as one file. The
-//! format is specified in spec/JUSTSPEECH_FORMAT.md; readers skip what they do
+//! format is specified in bundle/JUSTSPEECH_FORMAT.md; readers skip what they do
 //! not know, so new content ships as a new part type without breaking older
 //! apps.
 

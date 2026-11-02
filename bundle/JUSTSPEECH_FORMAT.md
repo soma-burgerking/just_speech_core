@@ -152,8 +152,8 @@ MIME 문자열을 바꿔 구분한다.
 
 ## 구현과 호환성 검증
 
-리더·라이터는 `crates/bundle`이다. 앱과 웹이 같은 crate를 쓰므로 위 규칙의 구현은 하나다.
+리더·라이터는 `bundle/rust`다. 앱과 웹이 같은 crate를 쓰므로 위 규칙의 구현은 하나다.
 
-`formatVersion`·`schema`마다 라이터가 실제로 쓴 파일을 `crates/bundle/tests/fixtures/`에 남기고, 읽는 쪽은
+`formatVersion`·`schema`마다 라이터가 실제로 쓴 파일을 `bundle/rust/tests/fixtures/`에 남기고, 읽는 쪽은
 모든 fixture를 열어야 한다. fixture는 추가만 하고 다시 만들지 않는다. 미래 버전을 흉내 낸 파일(모르는 선택
 part, 모르는 필수 part, 큰 `schema`)은 단위 테스트가 직접 조립해 읽는 쪽 규칙을 고정한다.
