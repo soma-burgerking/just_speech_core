@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, Write};
+use std::io::{self, Read, Seek, Write};
 
 use anyhow::{bail, ensure, Result};
 use serde::Serialize;
@@ -7,7 +7,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::manifest::*;
-use crate::read::hex;
+use crate::read::{hex, Head};
 use crate::MIME;
 
 pub struct NewBundle<'a> {
@@ -23,22 +23,32 @@ pub struct NewBundle<'a> {
 }
 
 /// Refuses what a reader would refuse or leave out, so every archive it
-/// finishes opens whole. On error `out` holds a partial archive to discard.
-pub fn write<W: Write + Seek>(
+/// finishes opens whole. `slides` are the deck's PNGs in order, each opened
+/// only when its turn comes; none writes no deck. On error `out` holds a
+/// partial archive to discard.
+pub fn write<W, S>(
     out: W,
     bundle: &NewBundle,
-    deck: Option<&mut dyn Read>,
-) -> Result<W> {
-    write_with(out, bundle, deck, LIMITS)
+    slides: impl IntoIterator<Item = io::Result<S>>,
+) -> Result<W>
+where
+    W: Write + Seek,
+    S: Read,
+{
+    write_with(out, bundle, slides, LIMITS)
 }
 
 /// [write] against the caps a reader opening with `limits` applies.
-pub(crate) fn write_with<W: Write + Seek>(
+pub(crate) fn write_with<W, S>(
     out: W,
     bundle: &NewBundle,
-    deck: Option<&mut dyn Read>,
+    slides: impl IntoIterator<Item = io::Result<S>>,
     limits: Limits,
-) -> Result<W> {
+) -> Result<W>
+where
+    W: Write + Seek,
+    S: Read,
+{
     ensure!(!bundle.bundle_id.is_empty(), "empty bundle id");
     ensure!(title_fits(bundle.title), "title too long");
     ensure!(script_valid(bundle.script), "blank script");
@@ -69,19 +79,39 @@ pub(crate) fn write_with<W: Write + Seek>(
         sha256: None,
     }];
 
-    if let Some(deck) = deck {
-        // PDF streams are compressed already; deflate would only cost time.
-        zip.start_file(DECK_PATH, stored)?;
-        let sha256 = copy_hashed(deck, &mut zip, limits.deck)?;
+    let mut deck = Vec::new();
+    let mut left = limits.deck;
+    for (i, slide) in slides.into_iter().enumerate() {
+        ensure!(i < MAX_SLIDE as usize, "deck over {MAX_SLIDE} slides");
+        let path = format!("{SLIDES_DIR}{}.png", i + 1);
+        // PNG is compressed already; deflate would only cost time.
+        zip.start_file(path.as_str(), stored)?;
+        let (sha256, size, head) = copy_hashed(&mut slide?, &mut zip, left)?;
+        ensure!(
+            slide_head_valid(&head),
+            "slide {} is not a PNG readers take",
+            i + 1
+        );
+        left -= size;
+        deck.push(SlideDecl {
+            path,
+            media_type: PNG.into(),
+            sha256: Some(sha256),
+        });
+    }
+    if !deck.is_empty() {
+        zip.start_file(DECK_PATH, deflated)?;
+        let index = DeckPart { slides: deck };
+        zip.write_all(&json_within(&index, limits.deck_index, "deck")?)?;
         parts.push(PartDecl {
             id: DECK.into(),
             kind: DECK.into(),
             path: DECK_PATH.into(),
-            schema: None,
-            media_type: Some(PDF.into()),
+            schema: Some(DECK_SCHEMA),
+            media_type: None,
             required: false,
             refs: vec![],
-            sha256: Some(sha256),
+            sha256: None,
         });
     }
 
@@ -104,7 +134,6 @@ pub(crate) fn write_with<W: Write + Seek>(
         });
     }
 
-    // Last, because it carries the deck's hash.
     zip.start_file(MANIFEST_PATH, deflated)?;
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
@@ -115,7 +144,13 @@ pub(crate) fn write_with<W: Write + Seek>(
         parts,
     };
     zip.write_all(&json_within(&manifest, limits.manifest, "manifest")?)?;
-    Ok(zip.finish()?)
+    let mut out = zip.finish()?;
+    ensure!(
+        out.stream_position()? <= limits.file,
+        "file over {} bytes",
+        limits.file
+    );
+    Ok(out)
 }
 
 /// The reader caps a part by its uncompressed bytes, which JSON escaping can
@@ -126,8 +161,14 @@ fn json_within(value: &impl Serialize, cap: u64, part: &str) -> Result<Vec<u8>> 
     Ok(json)
 }
 
-fn copy_hashed(from: &mut dyn Read, to: &mut impl Write, cap: u64) -> Result<String> {
+/// Copies at most `cap` bytes; returns their SHA-256, count and first bytes.
+fn copy_hashed(
+    from: &mut impl Read,
+    to: &mut impl Write,
+    cap: u64,
+) -> Result<(String, u64, Vec<u8>)> {
     let mut hasher = Sha256::new();
+    let mut head = Head::default();
     let mut buf = vec![0; 64 * 1024];
     let mut total = 0u64;
     loop {
@@ -137,10 +178,11 @@ fn copy_hashed(from: &mut dyn Read, to: &mut impl Write, cap: u64) -> Result<Str
         }
         total += n as u64;
         if total > cap {
-            bail!("deck over {cap} bytes");
+            bail!("deck over its cap");
         }
         hasher.update(&buf[..n]);
+        head.write_all(&buf[..n])?;
         to.write_all(&buf[..n])?;
     }
-    Ok(hex(&hasher.finalize()))
+    Ok((hex(&hasher.finalize()), total, head.0))
 }

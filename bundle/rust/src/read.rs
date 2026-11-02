@@ -39,7 +39,8 @@ pub struct Bundle {
     pub title: String,
     pub script: String,
     pub mappings: Option<Vec<SlideMapping>>,
-    pub has_deck: bool,
+    /// 0 when the bundle kept no deck.
+    pub slide_count: usize,
     /// Ids of the parts left out: unknown, invalid, or depending on one that
     /// was. For logs; the rest of the bundle stands without them.
     pub skipped: Vec<String>,
@@ -48,7 +49,7 @@ pub struct Bundle {
 pub struct BundleReader<R> {
     archive: ZipArchive<R>,
     bundle: Bundle,
-    deck_path: Option<String>,
+    slides: Vec<String>,
 }
 
 /// Why a part was left out. A required part's reason becomes the error.
@@ -61,13 +62,13 @@ enum Skip {
 enum Content {
     Script(String),
     Mappings(Vec<SlideMapping>),
-    /// Its entry name; the bytes are copied out on demand.
-    Deck(String),
+    /// Slide entry names in order; the bytes are copied out on demand.
+    Deck(Vec<String>),
 }
 
 impl<R: Read + Seek> BundleReader<R> {
-    /// Validates every part it keeps, the deck included, so a refused file is
-    /// refused here and [Self::copy_deck] can only fail on I/O.
+    /// Validates every part it keeps, each slide included, so a refused file
+    /// is refused here and [Self::copy_slide] can only fail on I/O.
     pub fn open(reader: R) -> Result<Self, ReadError> {
         Self::open_with(reader, LIMITS)
     }
@@ -80,6 +81,9 @@ impl<R: Read + Seek> BundleReader<R> {
             .map_err(|_| damaged("not a .justspeech"))?;
         if !sniff(&prefix) {
             return Err(damaged("not a .justspeech"));
+        }
+        if reader.seek(SeekFrom::End(0)).map_err(damaged)? > limits.file {
+            return Err(damaged(format!("over {} bytes", limits.file)));
         }
         let declared = declared_entries(&mut reader).map_err(damaged)?;
         let mut archive = ZipArchive::new(reader).map_err(damaged)?;
@@ -116,7 +120,7 @@ impl<R: Read + Seek> BundleReader<R> {
 
         let mut script = None;
         let mut mappings = None;
-        let mut deck_path = None;
+        let mut slides = Vec::new();
         for (id, content) in contents {
             if skipped.contains_key(id) {
                 continue;
@@ -124,7 +128,7 @@ impl<R: Read + Seek> BundleReader<R> {
             match content {
                 Content::Script(text) => script = Some(text),
                 Content::Mappings(m) => mappings = Some(m),
-                Content::Deck(path) => deck_path = Some(path),
+                Content::Deck(paths) => slides = paths,
             }
         }
         // A writer may leave `required` off the script; nothing imports without one.
@@ -149,13 +153,13 @@ impl<R: Read + Seek> BundleReader<R> {
             title: manifest.title,
             script,
             mappings,
-            has_deck: deck_path.is_some(),
+            slide_count: slides.len(),
             skipped: skipped_ids,
         };
         Ok(Self {
             archive,
             bundle,
-            deck_path,
+            slides,
         })
     }
 
@@ -163,15 +167,19 @@ impl<R: Read + Seek> BundleReader<R> {
         &self.bundle
     }
 
-    /// Copies the deck PDF into `out`; false when the bundle kept none. On
-    /// error `out` holds a partial copy for the caller to discard.
-    pub fn copy_deck<W: Write>(&mut self, out: &mut W) -> io::Result<bool> {
-        let Some(path) = &self.deck_path else {
-            return Ok(false);
+    /// Copies the PNG of slide `index` (0-based, below
+    /// [Bundle::slide_count]) into `out`. On error `out` holds a partial copy
+    /// for the caller to discard.
+    pub fn copy_slide<W: Write>(&mut self, index: usize, out: &mut W) -> io::Result<()> {
+        let Some(path) = self.slides.get(index) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("no slide {index}"),
+            ));
         };
         let mut entry = self.archive.by_name(path)?;
         io::copy(&mut entry, out)?;
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -248,17 +256,32 @@ fn read_part<R: Read + Seek>(
             Ok(Content::Mappings(mapping.mappings))
         }
         DECK => {
-            if part.media_type.as_deref() != Some(PDF) {
+            check_schema(part, DECK_SCHEMA)?;
+            let deck: DeckPart = read_json(archive, part, limits.deck_index)?;
+            if deck.slides.iter().any(|s| s.media_type != PNG) {
                 return Err(Skip::Unknown);
             }
-            stream_entry(
-                archive,
-                &part.path,
-                limits.deck,
-                part.sha256.as_deref(),
-                &mut io::sink(),
-            )?;
-            Ok(Content::Deck(part.path.clone()))
+            // Partly read, the deck would move every later slide's mapping.
+            if deck.slides.is_empty() || deck.slides.len() > MAX_SLIDE as usize {
+                return Err(Skip::Invalid);
+            }
+            let mut left = limits.deck;
+            for slide in &deck.slides {
+                let mut head = Head::default();
+                left -= stream_entry(
+                    archive,
+                    &slide.path,
+                    left,
+                    slide.sha256.as_deref(),
+                    &mut head,
+                )?;
+                if !slide_head_valid(&head.0) {
+                    return Err(Skip::Invalid);
+                }
+            }
+            Ok(Content::Deck(
+                deck.slides.into_iter().map(|s| s.path).collect(),
+            ))
         }
         _ => Err(Skip::Unknown),
     }
@@ -285,14 +308,14 @@ fn read_json<R: Read + Seek, T: DeserializeOwned>(
 }
 
 /// Stops at `cap` bytes actually read: the sizes an entry header declares are
-/// the writer's word, not a bound.
+/// the writer's word, not a bound. Returns the bytes read.
 fn stream_entry<R: Read + Seek, W: Write>(
     archive: &mut ZipArchive<R>,
     path: &str,
     cap: u64,
     sha256: Option<&str>,
     out: &mut W,
-) -> Result<(), Skip> {
+) -> Result<u64, Skip> {
     let mut entry = archive.by_name(path).map_err(|_| Skip::Invalid)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0; 64 * 1024];
@@ -314,7 +337,23 @@ fn stream_entry<R: Read + Seek, W: Write>(
             return Err(Skip::Invalid);
         }
     }
-    Ok(())
+    Ok(total)
+}
+
+/// Keeps the first [PNG_HEAD_LEN] bytes written to it.
+#[derive(Default)]
+pub(crate) struct Head(pub Vec<u8>);
+
+impl Write for Head {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let take = PNG_HEAD_LEN.saturating_sub(self.0.len()).min(buf.len());
+        self.0.extend_from_slice(&buf[..take]);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Leaves out every part that refers to a skipped or absent one, transitively.
