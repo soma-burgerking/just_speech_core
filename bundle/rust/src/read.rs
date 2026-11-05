@@ -239,9 +239,6 @@ fn read_part<R: Read + Seek>(
         SCRIPT => {
             check_schema(part, SCRIPT_SCHEMA)?;
             let script: ScriptPart = read_json(archive, part, limits.script)?;
-            if !script_valid(&script.text) {
-                return Err(Skip::Invalid);
-            }
             Ok(Content::Script(script.text))
         }
         SLIDE_MAPPING => {
