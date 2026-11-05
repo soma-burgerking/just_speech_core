@@ -51,7 +51,6 @@ where
 {
     ensure!(!bundle.bundle_id.is_empty(), "empty bundle id");
     ensure!(title_fits(bundle.title), "title too long");
-    ensure!(script_valid(bundle.script), "blank script");
     ensure!(
         mappings_valid(bundle.mappings),
         "mappings past the server's caps"
@@ -72,7 +71,11 @@ where
         id: SCRIPT.into(),
         kind: SCRIPT.into(),
         path: SCRIPT_PATH.into(),
-        schema: Some(SCRIPT_SCHEMA),
+        schema: Some(if bundle.script.trim().is_empty() {
+            SCRIPT_SCHEMA
+        } else {
+            NON_BLANK_SCRIPT_SCHEMA
+        }),
         media_type: None,
         required: true,
         refs: vec![],

@@ -280,7 +280,7 @@ fn newer_schema_is_unknown() {
     assert_eq!(reader.bundle().mappings, None);
 
     let mut newer_script = script_decl();
-    newer_script["schema"] = json!(2);
+    newer_script["schema"] = json!(3);
     assert!(needs_update(refused(crafted(
         &manifest(json!([newer_script])),
         entries
@@ -468,11 +468,6 @@ fn repeated_part_ids_or_v1_types_are_damaged() {
 #[test]
 fn bad_script_is_damaged() {
     let m = manifest(json!([script_decl()]));
-    let blank = r#"{"text":" \n\t "}"#.as_bytes();
-    assert!(is_damaged(refused(crafted(
-        &m,
-        &[("parts/script.json", blank)]
-    ))));
     assert!(is_damaged(refused(crafted(
         &m,
         &[("parts/script.json", b"not json")]
@@ -631,22 +626,44 @@ fn writer_refuses_what_a_reader_would() {
         created_at: "2026-11-02T10:00:00Z",
         generator: None,
         title: "t",
-        script: "  \n",
+        script: "hi",
         mappings: &[],
     };
-    assert!(write(Cursor::new(Vec::new()), &bundle, readers(&[])).is_err());
-
     let failing = [Err(io::Error::other("gone"))];
-    let script = NewBundle {
-        script: "hi",
-        ..bundle
-    };
     assert!(write(
         Cursor::new(Vec::new()),
-        &script,
+        &bundle,
         failing.map(|r: io::Result<&[u8]>| r)
     )
     .is_err());
+}
+
+fn script_schema(bytes: &[u8]) -> u64 {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let manifest: Value =
+        serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
+    manifest["parts"][0]["schema"].as_u64().unwrap()
+}
+
+#[test]
+fn a_blank_script_is_schema_2_and_reads_back() {
+    let blank = NewBundle {
+        bundle_id: "b1",
+        created_at: "2026-11-02T10:00:00Z",
+        generator: None,
+        title: "t",
+        script: "  \n",
+        mappings: &[],
+    };
+    let bytes = write(Cursor::new(Vec::new()), &blank, readers(&slides()))
+        .unwrap()
+        .into_inner();
+    assert_eq!(script_schema(&bytes), 2);
+    let reader = open(bytes);
+    assert_eq!(reader.bundle().script, "  \n");
+    assert_eq!(reader.bundle().slide_count, 2);
+
+    assert_eq!(script_schema(&exported("t", &[], &[]).unwrap()), 1);
 }
 
 #[test]

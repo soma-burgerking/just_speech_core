@@ -14,7 +14,11 @@ pub(crate) const DECK: &str = "deck";
 pub(crate) const SLIDE_MAPPING: &str = "slide-mapping";
 pub(crate) const V1_TYPES: [&str; 3] = [SCRIPT, DECK, SLIDE_MAPPING];
 
-pub(crate) const SCRIPT_SCHEMA: u32 = 1;
+/// 2 only lets `text` be blank. A script with text is still written as
+/// [NON_BLANK_SCRIPT_SCHEMA] so readers that predate 2 open it; they turn a
+/// blank one away as "update needed" rather than "damaged".
+pub(crate) const SCRIPT_SCHEMA: u32 = 2;
+pub(crate) const NON_BLANK_SCRIPT_SCHEMA: u32 = 1;
 pub(crate) const MAPPING_SCHEMA: u32 = 1;
 pub(crate) const DECK_SCHEMA: u32 = 1;
 pub(crate) const PNG: &str = "image/png";
@@ -135,10 +139,6 @@ pub struct SlideMapping {
 /// UTF-16 units, as the server's Kotlin `String.length` counts.
 pub(crate) fn title_fits(title: &str) -> bool {
     title.encode_utf16().count() <= MAX_TITLE
-}
-
-pub(crate) fn script_valid(text: &str) -> bool {
-    !text.trim().is_empty()
 }
 
 pub(crate) fn mappings_valid(mappings: &[SlideMapping]) -> bool {

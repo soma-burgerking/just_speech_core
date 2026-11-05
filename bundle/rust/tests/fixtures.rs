@@ -53,6 +53,32 @@ fn v1_opens() {
     }
 }
 
+#[test]
+fn v1_blank_script_opens() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/v1-blank-script.justspeech"
+    );
+    let mut reader = BundleReader::open(File::open(path).unwrap()).unwrap();
+    let bundle = reader.bundle();
+    assert_eq!(bundle.bundle_id, "3e7a1c90-5b2d-4f6e-8a14-c9d0b2e4f6a1");
+    assert_eq!(bundle.title, "슬라이드만 있는 발표");
+    assert_eq!(bundle.script, "");
+    assert_eq!(bundle.mappings, None);
+    assert!(bundle.skipped.is_empty());
+
+    assert_eq!(bundle.slide_count, 2);
+    let hashes = [
+        "cbbe91fd298465c49b6c8f8ee4127e584f7b038689e78e569cb210c794eea07e",
+        "ee5395b63cc63226add9cdd322d2cbe1fd0fbc4828c43e251f97b4320f5436a0",
+    ];
+    for (i, expected) in hashes.iter().enumerate() {
+        let mut slide = Vec::new();
+        reader.copy_slide(i, &mut slide).unwrap();
+        assert_eq!(hex(&Sha256::digest(&slide)), *expected, "slide {}", i + 1);
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
